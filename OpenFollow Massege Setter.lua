@@ -1,3 +1,13 @@
+-- ============================================================
+-- OpenFollow OSC Cue Command Plugin
+-- ============================================================
+
+local OPENFOLLOW_PART_OFFSET = 9000  -- Offset für OpenFollow-Parts, um Kollisionen mit anderen Parts zu vermeiden
+
+------------------------------------------------------------
+-- HELPERS: STRINGS
+------------------------------------------------------------
+
 local function escape_quotes(str)
     str = tostring(str or "")
     str = str:gsub("\\", "\\\\")
@@ -24,6 +34,10 @@ local function get_input(result, name)
     return trim(input or "")
 end
 
+------------------------------------------------------------
+-- HELPERS: VALIDATION
+------------------------------------------------------------
+
 local function is_only_numbers(str)
     str = tostring(str or "")
     return str:match("^%d+$") ~= nil
@@ -31,6 +45,14 @@ end
 
 local function is_cue_number(str)
     str = tostring(str or "")
+    return str:match("^%d+%.?%d*$") ~= nil
+end
+
+local function is_valid_seconds(str)
+    str = tostring(str or "")
+    if str == "" then
+        return true -- optional field
+    end
     return str:match("^%d+%.?%d*$") ~= nil
 end
 
@@ -67,7 +89,15 @@ local function is_valid_port(str)
     return port >= 1 and port <= 65535
 end
 
-local function show_error(title, message)
+local function contains_comma(str)
+    return tostring(str or ""):find(",") ~= nil
+end
+
+------------------------------------------------------------
+-- HELPERS: UI
+------------------------------------------------------------
+
+local function show_message(title, message)
     MessageBox({
         title = title,
         message = message,
@@ -77,15 +107,9 @@ local function show_error(title, message)
     })
 end
 
-local function show_info(title, message)
-    MessageBox({
-        title = title,
-        message = message,
-        commands = {
-            { value = 1, name = "OK" }
-        }
-    })
-end
+------------------------------------------------------------
+-- HELPERS: HANDLE PROPERTIES
+------------------------------------------------------------
 
 local function set_handle_property(handle, property_names, value)
     if not handle then
@@ -123,6 +147,12 @@ local function get_handle_property(handle, property_names)
     return nil
 end
 
+local function set_handle_properties(handle, properties)
+    for _, prop in ipairs(properties) do
+        set_handle_property(handle, prop[1], prop[2])
+    end
+end
+
 local function value_is_enabled(value)
     if value == true then
         return true
@@ -136,6 +166,10 @@ local function value_is_enabled(value)
 
     return value == "1" or value == "true" or value == "yes" or value == "on" or value == "enabled"
 end
+
+------------------------------------------------------------
+-- OSC BASE / ENABLE OUTPUT
+------------------------------------------------------------
 
 local function get_osc_base()
     local root = Root()
@@ -155,7 +189,7 @@ local function ensure_osc_enable_output()
     local osc_base = get_osc_base()
 
     if not osc_base then
-        show_error("OSC Error", "OSCBase konnte nicht gefunden werden.")
+        show_message("OSC Error", "OSCBase konnte nicht gefunden werden.")
         return false
     end
 
@@ -174,7 +208,7 @@ local function ensure_osc_enable_output()
         return true
     end
 
-    local set_success = set_handle_property(osc_base, enable_output_properties, 1)
+    set_handle_property(osc_base, enable_output_properties, 1)
 
     Cmd("CD ShowData.OSCBase")
     Cmd('Set Root "EnableOutput" 1')
@@ -183,18 +217,22 @@ local function ensure_osc_enable_output()
 
     local new_value = get_handle_property(osc_base, enable_output_properties)
 
-    if value_is_enabled(new_value) or set_success then
+    if value_is_enabled(new_value) then
         Printf("OSC Enable Output was enabled.")
         return true
     end
 
-    show_error(
+    show_message(
         "OSC Enable Output",
         "Enable Output konnte nicht automatisch geprüft oder eingeschaltet werden.\n\nBitte prüfe Menü > In & Out > OSC > Enable Output manuell."
     )
 
     return false
 end
+
+------------------------------------------------------------
+-- OSC DATA LINE LOOKUP / CREATION
+------------------------------------------------------------
 
 local function get_osc_line_count(osc_base)
     local count = 0
@@ -277,6 +315,10 @@ local function create_osc_line(osc_base, index)
     return line
 end
 
+------------------------------------------------------------
+-- CONFIGURE OPENFOLLOW OSC LINE
+------------------------------------------------------------
+
 local function configure_openfollow_osc(ip_address, port)
     ------------------------------------------------------------
     -- CHECK / ENABLE GLOBAL OSC OUTPUT
@@ -293,7 +335,7 @@ local function configure_openfollow_osc(ip_address, port)
     local osc_base, osc_line, osc_index = find_openfollow_osc_line()
 
     if not osc_base then
-        show_error("OSC Error", "OSCBase konnte nicht gefunden werden.")
+        show_message("OSC Error", "OSCBase konnte nicht gefunden werden.")
         return false
     end
 
@@ -302,47 +344,22 @@ local function configure_openfollow_osc(ip_address, port)
     end
 
     if not osc_line then
-        show_error("OSC Error", "OSC Data Line konnte nicht erstellt werden.")
+        show_message("OSC Error", "OSC Data Line konnte nicht erstellt werden.")
         return false
     end
 
     ------------------------------------------------------------
-    -- SET OSC DATA LINE
+    -- SET OSC DATA LINE (via API, tabellengetrieben)
     ------------------------------------------------------------
 
-    set_handle_property(osc_line, { "Name" }, "OpenFollow")
-
-    set_handle_property(osc_line, {
-        "DestinationIP",
-        "DestinationIp",
-        "Destination IP",
-        "IP",
-        "IPAddress",
-        "IP Address"
-    }, ip_address)
-
-    set_handle_property(osc_line, {
-        "Port",
-        "DestinationPort",
-        "Destination Port"
-    }, tonumber(port))
-
-    set_handle_property(osc_line, {
-        "Mode"
-    }, "UDP")
-
-    set_handle_property(osc_line, {
-        "SendCmd",
-        "SendCommand",
-        "Send Commands",
-        "SendCommands"
-    }, 1)
-
-    set_handle_property(osc_line, {
-        "EnableOutput",
-        "Enable Output",
-        "Output"
-    }, 1)
+    set_handle_properties(osc_line, {
+        { { "Name" }, "OpenFollow" },
+        { { "DestinationIP", "DestinationIp", "Destination IP", "IP", "IPAddress", "IP Address" }, ip_address },
+        { { "Port", "DestinationPort", "Destination Port" }, tonumber(port) },
+        { { "Mode" }, "UDP" },
+        { { "SendCmd", "SendCommand", "Send Commands", "SendCommands" }, 1 },
+        { { "EnableOutput", "Enable Output", "Output" }, 1 },
+    })
 
     ------------------------------------------------------------
     -- COMMAND LINE FALLBACK
@@ -359,7 +376,7 @@ local function configure_openfollow_osc(ip_address, port)
     Cmd('Set ' .. osc_index .. ' "Enable Output" 1')
     Cmd("CD Root")
 
-    show_info(
+    show_message(
         "OpenFollow Settings",
         "OSC Data Line gespeichert:\n\n" ..
         "Name: OpenFollow\n" ..
@@ -371,11 +388,14 @@ local function configure_openfollow_osc(ip_address, port)
     Printf("OpenFollow OSC Data Line configured.")
     Printf("OSC IP: " .. ip_address)
     Printf("OSC Port: " .. port)
-    Printf("OSC Send remains unchanged / No")
     Printf("OSC Send Commands enabled")
 
     return true
 end
+
+------------------------------------------------------------
+-- SETTINGS DIALOG
+------------------------------------------------------------
 
 local function open_settings()
     local popup = MessageBox({
@@ -399,17 +419,21 @@ local function open_settings()
     local port = get_input(popup, "Port")
 
     if not is_valid_ip(ip_address) then
-        show_error("Invalid IP Address", "Bitte eine gültige IP-Adresse eingeben, z.B. 127.0.0.1.")
+        show_message("Invalid IP Address", "Bitte eine gültige IP-Adresse eingeben, z.B. 127.0.0.1.")
         return
     end
 
     if not is_valid_port(port) then
-        show_error("Invalid Port", "Bitte einen gültigen Port zwischen 1 und 65535 eingeben.")
+        show_message("Invalid Port", "Bitte einen gültigen Port zwischen 1 und 65535 eingeben.")
         return
     end
 
     configure_openfollow_osc(ip_address, port)
 end
+
+------------------------------------------------------------
+-- MAIN: CREATE OPENFOLLOW CUE COMMAND
+------------------------------------------------------------
 
 local function create_openfollow_cue_command()
     local popup = MessageBox({
@@ -447,37 +471,56 @@ local function create_openfollow_cue_command()
     local info = get_input(popup, "Info")
     local seconds = get_input(popup, "Dismiss-Time")
 
+    ------------------------------------------------------------
+    -- VALIDATION
+    ------------------------------------------------------------
+
     if sequence_number == "" then
-        show_error("Invalid Sequence", "Sequence darf nicht leer sein.")
+        show_message("Invalid Sequence", "Sequence darf nicht leer sein.")
         return
     end
 
     if cue_number == "" then
-        show_error("Invalid Cue", "Cue darf nicht leer sein.")
+        show_message("Invalid Cue", "Cue darf nicht leer sein.")
         return
     end
 
     if not is_only_numbers(sequence_number) then
-        show_error("Invalid Sequence", "Sequence darf nur Zahlen enthalten.")
+        show_message("Invalid Sequence", "Sequence darf nur Zahlen enthalten.")
         return
     end
 
     if not is_cue_number(cue_number) then
-        show_error("Invalid Cue", "Cue darf nur eine Zahl sein, z.B. 1 oder 1.5.")
+        show_message("Invalid Cue", "Cue darf nur eine Zahl sein, z.B. 1 oder 1.5.")
         return
     end
 
     if not is_only_numbers(marker_id) then
-        show_error("Invalid Marker ID", "Marker ID darf nur Zahlen enthalten.")
+        show_message("Invalid Marker ID", "Marker ID darf nur Zahlen enthalten.")
         return
     end
 
-    local part_number = 9000 + tonumber(marker_id)
+    if not is_valid_seconds(seconds) then
+        show_message("Invalid Dismiss-Time", "Dismiss-Time muss eine Zahl sein (z.B. 3 oder 3.5).")
+        return
+    end
 
+    if contains_comma(message) or contains_comma(info) then
+        show_message("Invalid Input", "Message und Info dürfen kein Komma (,) enthalten, da dies das OSC-Payload zerstört.")
+        return
+    end
+
+    ------------------------------------------------------------
+    -- BUILD CUE COMMAND
+    ------------------------------------------------------------
+
+    local part_number = OPENFOLLOW_PART_OFFSET + tonumber(marker_id)
+
+    -- Message/Info werden escaped, um Anführungszeichen im Cmd-String abzusichern
     local osc_payload =
         "/message,ssif," ..
-        message .. "," ..
-        info .. "," ..
+        escape_quotes(message) .. "," ..
+        escape_quotes(info) .. "," ..
         marker_id .. "," ..
         seconds
 
@@ -497,11 +540,18 @@ local function create_openfollow_cue_command()
     local part_handle = part_list and part_list[1]
 
     if not part_handle then
-        show_error("Error", "Part konnte nicht gefunden werden: " .. part_target)
+        show_message("Error", "Part konnte nicht gefunden werden: " .. part_target)
         return
     end
 
-    part_handle.Command = cue_command
+    local command_set_ok = pcall(function()
+        part_handle.Command = cue_command
+    end)
+
+    if not command_set_ok then
+        show_message("Error", "Command konnte nicht auf dem Part gesetzt werden: " .. part_target)
+        return
+    end
 
     local part_label = "OpenFollow ID " .. marker_id
 
